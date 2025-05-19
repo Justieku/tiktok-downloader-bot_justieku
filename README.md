@@ -12,10 +12,12 @@ Bot translated into these languagess: ru, en, cn, hi, es, fr, ar, pt, id, pl, cs
   - `sudo apt install python3.10 python3.10-venv python3.10-dev -y`
   - `git clone https://github.com/Justieku/tiktok-downloader-bot_justieku`
   - `python3.10 -m venv tiktok-downloader-bot_justieku`
+  - `tmux new -s tt`
   - `cd tiktok-downloader-bot_justieku && source bin/activate`
   - Edit settings.py - add your `API_TOKEN` from @BotFather using nano settings.py
   - `pip install -r requirements.txt`
-  - `python3 tt_download_bot.py` or `start.sh` for Linux
+  - `sudo chmod +x start.sh`
+  - `start.sh`
 
 ## Features
 ### Inline mode
