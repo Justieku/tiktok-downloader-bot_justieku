@@ -13,7 +13,7 @@ Bot translated into these languagess: ru, en, cn, hi, es, fr, ar, pt, id, pl, cs
   - `git clone https://github.com/Justieku/tiktok-downloader-bot_justieku`
   - `python3.10 -m venv tiktok-downloader-bot_justieku`
   - `cd tiktok-downloader-bot_justieku && source bin/activate`
-  - Edit settings.py - add your `API_TOKEN` from @BotFather
+  - Edit settings.py - add your `API_TOKEN` from @BotFather using nano settings.py
   - `pip install -r requirements.txt`
   - `python3 tt_download_bot.py`
 
