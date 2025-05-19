@@ -1,3 +1,7 @@
+I forked it for my own use. The original author can be found at https://github.com/sero01000/tiktok-downloader-bot.
+
+Я сделал форк для собственного использования. Оригинального автора можно найти на https://github.com/sero01000/tiktok-downloader-bot.
+
 # yt-dlp version
 auto download yt-dlp if not installed
 
