@@ -15,7 +15,7 @@ Bot translated into these languagess: ru, en, cn, hi, es, fr, ar, pt, id, pl, cs
   - `cd tiktok-downloader-bot_justieku && source bin/activate`
   - Edit settings.py - add your `API_TOKEN` from @BotFather using nano settings.py
   - `pip install -r requirements.txt`
-  - `python3 tt_download_bot.py`
+  - `python3 tt_download_bot.py` or `start.sh` for Linux
 
 ## Features
 ### Inline mode
