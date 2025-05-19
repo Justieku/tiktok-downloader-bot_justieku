@@ -50,11 +50,11 @@ async def tt_download2(message: types.Message):
     try:
         response = await yt_dlp(link)
         if response.endswith(".mp3"):
-            await message.reply_audio(open(response, 'rb'), caption='@XLR_TT_BOT', title=link)
+            await message.reply_audio(open(response, 'rb'), title=link)
         # video
         else:
             logging.info(f"VIDEO: {response}")
-            await message.reply_video(open(response, 'rb'), caption='@XLR_TT_BOT',)
+            await message.reply_video(open(response, 'rb'),)
         os.remove(response)
 
     except Exception as e:
