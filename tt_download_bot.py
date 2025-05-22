@@ -1,28 +1,21 @@
 import logging
-import time
 import os
+from re import findall
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from aiogram.types import InlineQuery, InputTextMessageContent, InlineQueryResultArticle, InlineQueryResultVideo, InlineQueryResultAudio
 
-from re import findall
-from httpx import AsyncClient
-from hashlib import md5
-
-from tt_video import tt_videos_or_images, convert_image, divide_chunks, yt_dlp, get_url_of_yt_dlp
+from tt_video import yt_dlp
 from settings import languages, API_TOKEN
 
 storage = MemoryStorage()
 logging.basicConfig(level=logging.INFO)
 
-# Initialize bot and dispatcher
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=storage)
 
 def is_tool(name):
     from shutil import which
-
     return which(name) is not None
 
 def get_user_lang(locale):
@@ -31,6 +24,18 @@ def get_user_lang(locale):
         user_lang = "en"
     return user_lang
 
+TIKTOK_REGEX = r'https://(vm\.tiktok\.com|vt\.tiktok\.com|www\.tiktok\.com)/\S+'
+YTSHORTS_REGEX = r'https://(youtube\.com/shorts/\S+|youtu\.be/\S+)'
+INSTAGRAM_REGEX = r'https://(www\.)?instagram\.com/reel/\S+'
+VK_REGEX = r'https://(www\.)?vk\.com/(video|clip)[\w\-/]+'
+
+def is_supported_link(text: str) -> bool:
+    return bool(
+        findall(TIKTOK_REGEX, text) or
+        findall(YTSHORTS_REGEX, text) or
+        findall(INSTAGRAM_REGEX, text) or
+        findall(VK_REGEX, text)
+    )
 
 @dp.message_handler(commands=['start', 'help'])
 @dp.throttled(rate=2)
@@ -38,38 +43,40 @@ async def send_welcome(message: types.Message):
     user_lang = get_user_lang(message.from_user.locale)
     await message.reply(languages[user_lang]["help"])
 
-
-@dp.message_handler(regexp='https://\w{1,3}?\.?\w+\.\w{1,3}/')
+@dp.message_handler(lambda message: is_supported_link(message.text))
 @dp.throttled(rate=3)
-async def tt_download2(message: types.Message):
+async def handle_supported_links(message: types.Message):
     user_lang = get_user_lang(message.from_user.locale)
+    link = findall(r'\bhttps?://\S+', message.text)[0]
 
-    await message.reply(languages[user_lang]["wait"])
-    link = findall(r'\bhttps?://.*\w{1,30}\S+', message.text)[0]
+    wait_msg = await message.reply("Пожалуйста, подождите!\nВаше видео загружается...")
 
     try:
         response = await yt_dlp(link)
         if response.endswith(".mp3"):
             await message.reply_audio(open(response, 'rb'), title=link)
-        # video
         else:
-            logging.info(f"VIDEO: {response}")
-            await message.reply_video(open(response, 'rb'),)
+            await message.reply_video(open(response, 'rb'))
         os.remove(response)
 
     except Exception as e:
         logging.error(e)
         await message.reply(f"error: {e}")
-        os.remove(response)
-
+        try:
+            os.remove(response)
+        except:
+            pass
+    finally:
+        try:
+            await bot.delete_message(chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
+        except Exception as del_err:
+            logging.warning(f"Не удалось удалить сообщение: {del_err}")
 
 @dp.message_handler()
 @dp.throttled(rate=3)
-async def echo(message: types.Message):
-    user_lang = get_user_lang(message.from_user.locale)
-
-    await message.answer(languages[user_lang]["invalid_link"])
-
+async def handle_invalid_links(message: types.Message):
+    if message.chat.type == 'private':
+        await message.reply("Неверная ссылка, пришлите правильную ссылку youtube.com/shorts/, Tik Tok, VK или Instagram Reals.")
 
 if __name__ == '__main__':
     if is_tool("yt-dlp"):
