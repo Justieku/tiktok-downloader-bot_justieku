@@ -25,7 +25,7 @@ def get_user_lang(locale):
     return "en"
 
 TIKTOK_REGEX = r'https://(vm\.tiktok\.com|vt\.tiktok\.com|www\.tiktok\.com)/\S+'
-YTSHORTS_REGEX = r'https://(youtube\.com/shorts/\S+|youtu\.be/\S+)'
+YTSHORTS_REGEX = r'https://(www\.)?youtube\.com/shorts/[^\s?]+'
 INSTAGRAM_REGEX = r'https://(www\.)?instagram\.com/reel/\S+'
 VK_REGEX = r'https://(www\.)?vk\.com/(video|clip)[\w\-/]+'
 
