@@ -60,7 +60,7 @@ async def yt_dlp(url):
         stdin=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=90)
     except asyncio.exceptions.TimeoutError:
         try:
             proc.kill()
