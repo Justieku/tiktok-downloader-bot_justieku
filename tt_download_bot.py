@@ -18,11 +18,11 @@ def is_tool(name):
     from shutil import which
     return which(name) is not None
 
+# Безопасное определение языка пользователя
 def get_user_lang(locale):
-    user_lang = locale.language
-    if user_lang not in languages:
-        user_lang = "en"
-    return user_lang
+    if locale and hasattr(locale, 'language'):
+        return locale.language if locale.language in languages else "en"
+    return "en"
 
 TIKTOK_REGEX = r'https://(vm\.tiktok\.com|vt\.tiktok\.com|www\.tiktok\.com)/\S+'
 YTSHORTS_REGEX = r'https://(youtube\.com/shorts/\S+|youtu\.be/\S+)'
@@ -41,7 +41,10 @@ def is_supported_link(text: str) -> bool:
 @dp.throttled(rate=2)
 async def send_welcome(message: types.Message):
     user_lang = get_user_lang(message.from_user.locale)
-    await message.reply(languages[user_lang]["help"])
+    await message.reply(
+        languages[user_lang]["help"],
+        disable_notification=True
+    )
 
 @dp.message_handler(lambda message: is_supported_link(message.text))
 @dp.throttled(rate=3)
@@ -49,19 +52,32 @@ async def handle_supported_links(message: types.Message):
     user_lang = get_user_lang(message.from_user.locale)
     link = findall(r'\bhttps?://\S+', message.text)[0]
 
-    wait_msg = await message.reply("Пожалуйста, подождите!\nВаше видео загружается...")
+    wait_msg = await message.reply(
+        "Пожалуйста, подождите!\nВаше видео загружается...",
+        disable_notification=True
+    )
 
     try:
         response = await yt_dlp(link)
         if response.endswith(".mp3"):
-            await message.reply_audio(open(response, 'rb'), title=link)
+            await message.reply_audio(
+                open(response, 'rb'),
+                title=link,
+                disable_notification=True
+            )
         else:
-            await message.reply_video(open(response, 'rb'))
+            await message.reply_video(
+                open(response, 'rb'),
+                disable_notification=True
+            )
         os.remove(response)
 
     except Exception as e:
         logging.error(e)
-        await message.reply(f"error: {e}")
+        await message.reply(
+            f"error: {e}",
+            disable_notification=True
+        )
         try:
             os.remove(response)
         except:
@@ -76,7 +92,10 @@ async def handle_supported_links(message: types.Message):
 @dp.throttled(rate=3)
 async def handle_invalid_links(message: types.Message):
     if message.chat.type == 'private':
-        await message.reply("Неверная ссылка, пришлите правильную ссылку youtube.com/shorts/, Tik Tok, VK или Instagram Reals.")
+        await message.reply(
+            "Неверная ссылка, пришлите правильную ссылку youtube.com/shorts/, Tik Tok, VK или Instagram Reals.",
+            disable_notification=True
+        )
 
 if __name__ == '__main__':
     if is_tool("yt-dlp"):
@@ -84,4 +103,3 @@ if __name__ == '__main__':
         executor.start_polling(dp, skip_updates=True)
     else:
         logging.error("yt-dlp not installed! Run: sudo apt install yt-dlp")
-
