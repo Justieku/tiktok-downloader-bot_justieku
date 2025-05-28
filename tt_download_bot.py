@@ -79,6 +79,12 @@ def escape_markdown(text: str) -> str:
 
 @dp.message_handler(content_types=types.ContentType.VOICE)
 async def voice_to_text(message: types.Message):
+    # Показываем пользователю уведомление, что идет обработка
+    wait_msg = await message.reply(
+        "🎤 Пожалуйста, подождите!\nВаше голосовое сообщение обрабатывается...",
+        disable_notification=True,
+    )
+
     file = await bot.get_file(message.voice.file_id)
     file_path = file.file_path
     file_name = f"{uuid.uuid4()}.ogg"
@@ -101,7 +107,10 @@ async def voice_to_text(message: types.Message):
                     disable_notification=True,
                 )
             except sr.UnknownValueError:
-                await message.reply("Не удалось распознать голосовое сообщение, бред сумасшедшего", disable_notification=True)
+                await message.reply(
+                    "Не удалось распознать голосовое сообщение, бред сумасшедшего",
+                    disable_notification=True,
+                )
     finally:
         # Удаляем оба файла в любом случае
         for f in (file_name, wav_file):
@@ -110,6 +119,11 @@ async def voice_to_text(message: types.Message):
                     os.remove(f)
                 except Exception as e:
                     logging.warning(f"Не удалось удалить {f}: {e}")
+        # Удаляем уведомление "Пожалуйста, подождите!"
+        try:
+            await bot.delete_message(chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
+        except Exception as del_err:
+            logging.warning(f"Не удалось удалить сообщение: {del_err}")
 
 @dp.message_handler(lambda message: is_supported_link(message.text))
 @dp.throttled(rate=3)
@@ -118,7 +132,7 @@ async def handle_supported_links(message: types.Message):
     link = findall(r'\bhttps?://\S+', message.text)[0]
 
     wait_msg = await message.reply(
-        "Пожалуйста, подождите!\nВаше видео загружается...",
+        "⏳ Пожалуйста, подождите!\nВаше видео загружается...",
         disable_notification=True
     )
 
