@@ -42,12 +42,11 @@ def is_supported_link(text: str) -> bool:
 def cleanup_files(response_path):
     if not response_path:
         return
-    base = os.path.splitext(response_path)[0]
-    for f in glob.glob(f"{base}*"):
-        try:
-            os.remove(f)
-        except Exception as e:
-            logging.warning(f"Не удалось удалить {f}: {e}")
+
+    try:
+        os.remove(os.path.abspath(response_path))
+    except Exception as e:
+        logging.warning(f"Не удалось удалить {response_path}: {e}")
 
 @dp.message_handler(commands=['start', 'help'])
 @dp.throttled(rate=2)
@@ -74,29 +73,43 @@ async def text_to_speech(message: types.Message):
 
     os.remove(filename)
 
+def escape_markdown(text: str) -> str:
+    escape_chars = r'\_*[]()~`>#+-=|{}.!'
+    return ''.join(['\\' + c if c in escape_chars else c for c in text])
+
 @dp.message_handler(content_types=types.ContentType.VOICE)
 async def voice_to_text(message: types.Message):
     file = await bot.get_file(message.voice.file_id)
     file_path = file.file_path
     file_name = f"{uuid.uuid4()}.ogg"
-
-    await bot.download_file(file_path, file_name)
-
     wav_file = file_name.replace(".ogg", ".wav")
-    sound = AudioSegment.from_ogg(file_name)
-    sound.export(wav_file, format="wav")
 
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(wav_file) as source:
-        audio_data = recognizer.record(source)
-        try:
-            text = recognizer.recognize_google(audio_data, language="ru-RU")
-            await message.reply(f"🗣 Распознанный текст:\n||{text}||", parse_mode="MarkdownV2", disable_notification=True)
-        except sr.UnknownValueError:
-            await message.reply("Не удалось распознать голосовое сообщение.", disable_notification=True)
+    try:
+        await bot.download_file(file_path, file_name)
+        sound = AudioSegment.from_ogg(file_name)
+        sound.export(wav_file, format="wav")
 
-    os.remove(file_name)
-    os.remove(wav_file)
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_file) as source:
+            audio_data = recognizer.record(source)
+            try:
+                text = recognizer.recognize_google(audio_data, language="ru-RU")
+                escaped_text = escape_markdown(text)
+                await message.reply(
+                    f"🗣 Распознанный текст:\n||{escaped_text}||",
+                    parse_mode="MarkdownV2",
+                    disable_notification=True,
+                )
+            except sr.UnknownValueError:
+                await message.reply("Не удалось распознать голосовое сообщение, бред сумасшедшего", disable_notification=True)
+    finally:
+        # Удаляем оба файла в любом случае
+        for f in (file_name, wav_file):
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except Exception as e:
+                    logging.warning(f"Не удалось удалить {f}: {e}")
 
 @dp.message_handler(lambda message: is_supported_link(message.text))
 @dp.throttled(rate=3)
