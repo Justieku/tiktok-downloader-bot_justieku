@@ -1,18 +1,17 @@
 from httpx import AsyncClient
 
-from re import findall
 from io import BytesIO
 from PIL import Image
 from subprocess import check_output, Popen, TimeoutExpired, PIPE
-import time
 import asyncio
 import platform
-
+import os
+import glob
+import re
 
 def divide_chunks(list, n):
     for i in range(0, len(list), n):
         yield list[i:i + n]
-
 
 def convert_image(image, extention):  # "JPEG"
     byteImgIO = BytesIO()
@@ -22,42 +21,44 @@ def convert_image(image, extention):  # "JPEG"
     return byteImgIO
 
 def get_url_of_yt_dlp():
-    download_url="https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
-
-    os = platform.system().lower()
-    arch = platform.machine().lower();
-    if os == None or arch == None:
-        print(f"Cant detect os({os}) or arch({arch})")
+    download_url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
+    os_name = platform.system().lower()
+    arch = platform.machine().lower()
+    if os_name is None or arch is None:
+        print(f"Cant detect os({os_name}) or arch({arch})")
     else:
-        print(os,arch)
-        if os == "darwin":
+        print(os_name, arch)
+        if os_name == "darwin":
             return f"{download_url}_macos"
-        elif os == "windows":
-            if arch in ["amd64","x86_64"]:
-                arch=".exe"
-            elif arch in ["i386","i686"]:
-                arch="_x86.exe"
+        elif os_name == "windows":
+            if arch in ["amd64", "x86_64"]:
+                arch = ".exe"
+            elif arch in ["i386", "i686"]:
+                arch = "_x86.exe"
             else:
                 return None
             return f"{download_url}{arch}"
-        elif os == "linux":
-            if arch in ["aarch64","aarch64_be", "armv8b", "armv8l"]:
+        elif os_name == "linux":
+            if arch in ["aarch64", "aarch64_be", "armv8b", "armv8l"]:
                 arch = "_linux_aarch64"
-            elif arch in ["amd64","x86_64"]:
+            elif arch in ["amd64", "x86_64"]:
                 arch = "_linux"
             elif arch == "armv7l":
-                arch="_linux_armv7l"
+                arch = "_linux_armv7l"
             else:
                 return None
             return f"{download_url}{arch}"
 
 # only video or music
-# async
 async def yt_dlp(url):
+    args = [
+        'yt-dlp', url, "--max-filesize", "50M", "--max-downloads", "1", "--restrict-filenames"
+    ]
     proc = await asyncio.create_subprocess_exec(
-        'yt-dlp', url, "--max-filesize", "50M", "--max-downloads", "1", "--restrict-filenames",#, "-o", "%(title)s.%(ext)s", 
+        *args,
         stdout=asyncio.subprocess.PIPE,
         stdin=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=90)
@@ -66,31 +67,46 @@ async def yt_dlp(url):
             proc.kill()
         except OSError:
             print("timeout no such process")
-            # Ignore 'no such process' error
             pass
         raise Exception('timeout')
 
+    filename = None
     for line in stdout.decode("utf-8").splitlines():
         print(line)
-        filename = findall(r" Destination: (.*?)$", line)
-        if len(filename) == 0:
-            filename = findall(r" (.*?) has already been downloaded$", line)
-            if len(filename) > 0:
-                filename = filename[0]
-                print("FOUND")
-                break
-        else:
-            filename = filename[0]
-            print("FOUND")
+        match_dest = re.findall(r" Destination: (.*?)$", line)
+        match_already = re.findall(r" (.*?) has already been downloaded$", line)
+        if match_dest:
+            filename = match_dest[0]
+            break
+        elif match_already:
+            filename = match_already[0]
             break
     else:
-        print("file not found")
-        raise Exception('file not found')
-    return filename
+        raise Exception('file not found (yt-dlp did not report a destination file)')
 
+    if os.path.exists(filename):
+        return filename
+
+    fname_base_ext = re.sub(r'\.f\d+\.', '.', filename)
+    if os.path.exists(fname_base_ext):
+        return fname_base_ext
+
+    prefix = re.sub(r'\.f\d+(\.\w+)$', r'\1', filename)
+    base_no_ext = os.path.splitext(prefix)[0]
+    candidates = glob.glob(f"{base_no_ext}.*")
+    if candidates:
+        candidates.sort(key=os.path.getmtime, reverse=True)
+        return candidates[0]
+
+    all_mp4 = glob.glob("*.mp4")
+    for f in all_mp4:
+        if os.path.splitext(f)[0].startswith(os.path.splitext(base_no_ext)[0]):
+            return f
+
+    raise FileNotFoundError(f"{filename} not found. Tried also: {fname_base_ext}, {base_no_ext}.*, and similar .mp4 files")
 
 async def tt_videos_or_images(url):
-    video_id_from_url = findall('https://www.tiktok.com/@.*?/video/(\d+)', url)
+    video_id_from_url = re.findall('https://www.tiktok.com/@.*?/video/(\d+)', url)
     user_agent = "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:105.0) Gecko/20100101 Firefox/105.0"
     if len(video_id_from_url) > 0:
         video_id = video_id_from_url[0]
@@ -104,12 +120,11 @@ async def tt_videos_or_images(url):
             r1 = await client.get(url, headers=headers1)
         print("r1", r1.status_code)
         if r1.status_code == 301:
-            video_id = findall(
+            video_id = re.findall(
                 'a href="https://\w{1,3}\.tiktok\.com/(?:@.*?/video|v)/(\d+)', r1.text)[0]
         elif r1.status_code == 403:
-            video_id = findall("video&#47;(\d+)", r1.text)[0]
+            video_id = re.findall("video&#47;(\d+)", r1.text)[0]
         else:
-            # raise BaseException('Unknown status code', r1.status_code)
             return BaseException('Unknown status code', r1.status_code)
 
     print("video_id:", video_id)
@@ -119,10 +134,8 @@ async def tt_videos_or_images(url):
     print("r2", r2.status_code)
     print("r2_headers:", r2.headers)
     print("r2_text:", r2.text)
-    # resp = r2.json()
     resp = r2.json().get("aweme_detail")
-    if resp == None:
-        # raise BaseException('No video here')
+    if resp is None:
         return BaseException('No video here')
 
     is_video = len(resp["video"]["bit_rate"]) > 0
@@ -132,6 +145,7 @@ async def tt_videos_or_images(url):
     desc = resp["desc"]
     statistic = resp["statistics"]
     music = resp["music"]["play_url"]["uri"]
+
     if is_video:
         cover_url = resp["video"]["origin_cover"]["url_list"][0]
 
@@ -144,11 +158,11 @@ async def tt_videos_or_images(url):
             quality_type = bit_rate["quality_type"]
 
             if data_size > 19999999:
-                print("to_large_for_tg", height, "x", width, data_size /
-                      1000000, "MB", "quality_type:", quality_type)
+                print("to_large_for_tg", height, "x", width, data_size / 1000000,
+                      "MB", "quality_type:", quality_type)
             else:
-                print("good_for_tg", height, "x", width, data_size /
-                      1000000, "MB", "quality_type:", quality_type,
+                print("good_for_tg", height, "x", width, data_size / 1000000,
+                      "MB", "quality_type:", quality_type,
                       "url:", url_list[0])
                 videos_url = url_list
                 large_for_tg = False
