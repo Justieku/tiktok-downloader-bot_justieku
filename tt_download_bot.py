@@ -1,9 +1,14 @@
 import logging
 import os
+import glob
+import uuid
 from re import findall
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from gtts import gTTS
+from pydub import AudioSegment
+import speech_recognition as sr
 
 from tt_video import yt_dlp
 from settings import languages, API_TOKEN
@@ -18,7 +23,6 @@ def is_tool(name):
     from shutil import which
     return which(name) is not None
 
-# Безопасное определение языка пользователя
 def get_user_lang(locale):
     if locale and hasattr(locale, 'language'):
         return locale.language if locale.language in languages else "en"
@@ -26,16 +30,24 @@ def get_user_lang(locale):
 
 TIKTOK_REGEX = r'https://(vm\.tiktok\.com|vt\.tiktok\.com|www\.tiktok\.com)/\S+'
 YTSHORTS_REGEX = r'https://(www\.)?youtube\.com/shorts/[^\s?]+'
-INSTAGRAM_REGEX = r'https://(www\.)?instagram\.com/reel/\S+'
-VK_REGEX = r'https://(www\.)?vk\.com/(video|clip)[\w\-/]+'
+VK_REGEX = r'https://(www\.)?vk\.com/(video|clip)[\w/-]+'
 
 def is_supported_link(text: str) -> bool:
     return bool(
         findall(TIKTOK_REGEX, text) or
         findall(YTSHORTS_REGEX, text) or
-        findall(INSTAGRAM_REGEX, text) or
         findall(VK_REGEX, text)
     )
+
+def cleanup_files(response_path):
+    if not response_path:
+        return
+    base = os.path.splitext(response_path)[0]
+    for f in glob.glob(f"{base}*"):
+        try:
+            os.remove(f)
+        except Exception as e:
+            logging.warning(f"Не удалось удалить {f}: {e}")
 
 @dp.message_handler(commands=['start', 'help'])
 @dp.throttled(rate=2)
@@ -45,6 +57,46 @@ async def send_welcome(message: types.Message):
         languages[user_lang]["help"],
         disable_notification=True
     )
+
+@dp.message_handler(commands=['tts'])
+async def text_to_speech(message: types.Message):
+    text = message.get_args()
+    if not text:
+        await message.reply("Пришлите текст после команды /tts", disable_notification=True)
+        return
+
+    tts = gTTS(text, lang='ru')
+    filename = f"{uuid.uuid4()}.mp3"
+    tts.save(filename)
+
+    with open(filename, "rb") as f:
+        await message.reply_voice(f, disable_notification=True)
+
+    os.remove(filename)
+
+@dp.message_handler(content_types=types.ContentType.VOICE)
+async def voice_to_text(message: types.Message):
+    file = await bot.get_file(message.voice.file_id)
+    file_path = file.file_path
+    file_name = f"{uuid.uuid4()}.ogg"
+
+    await bot.download_file(file_path, file_name)
+
+    wav_file = file_name.replace(".ogg", ".wav")
+    sound = AudioSegment.from_ogg(file_name)
+    sound.export(wav_file, format="wav")
+
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(wav_file) as source:
+        audio_data = recognizer.record(source)
+        try:
+            text = recognizer.recognize_google(audio_data, language="ru-RU")
+            await message.reply(f"🗣 Распознанный текст:\n||{text}||", parse_mode="MarkdownV2", disable_notification=True)
+        except sr.UnknownValueError:
+            await message.reply("Не удалось распознать голосовое сообщение.", disable_notification=True)
+
+    os.remove(file_name)
+    os.remove(wav_file)
 
 @dp.message_handler(lambda message: is_supported_link(message.text))
 @dp.throttled(rate=3)
@@ -57,20 +109,24 @@ async def handle_supported_links(message: types.Message):
         disable_notification=True
     )
 
+    response = None
+
     try:
         response = await yt_dlp(link)
         if response.endswith(".mp3"):
-            await message.reply_audio(
-                open(response, 'rb'),
-                title=link,
-                disable_notification=True
-            )
+            with open(response, 'rb') as f:
+                await message.reply_audio(
+                    f,
+                    title=link,
+                    disable_notification=True
+                )
         else:
-            await message.reply_video(
-                open(response, 'rb'),
-                disable_notification=True
-            )
-        os.remove(response)
+            with open(response, 'rb') as f:
+                await message.reply_video(
+                    f,
+                    disable_notification=True
+                )
+        cleanup_files(response)
 
     except Exception as e:
         logging.error(e)
@@ -78,10 +134,8 @@ async def handle_supported_links(message: types.Message):
             f"error: {e}",
             disable_notification=True
         )
-        try:
-            os.remove(response)
-        except:
-            pass
+        if response:
+            cleanup_files(response)
     finally:
         try:
             await bot.delete_message(chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
@@ -93,7 +147,7 @@ async def handle_supported_links(message: types.Message):
 async def handle_invalid_links(message: types.Message):
     if message.chat.type == 'private':
         await message.reply(
-            "Неверная ссылка, пришлите правильную ссылку youtube.com/shorts/, Tik Tok, VK или Instagram Reals.",
+            "Неверная ссылка, пришлите правильную ссылку youtube.com/shorts/, TikTok или VK.",
             disable_notification=True
         )
 
