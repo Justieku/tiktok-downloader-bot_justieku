@@ -25,4 +25,8 @@ Bot translated into these languagess: ru, en, cn, hi, es, fr, ar, pt, id, pl, cs
 
 ### Default mode
   Just send link of tiktok video or image to get video or media group of images
+
+  /tts command text to voice
+
+  voice to text
   
