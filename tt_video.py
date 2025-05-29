@@ -1,13 +1,11 @@
+import asyncio
+import glob
+import os
+import platform
+import re
 from httpx import AsyncClient
-
 from io import BytesIO
 from PIL import Image
-from subprocess import check_output, Popen, TimeoutExpired, PIPE
-import asyncio
-import platform
-import os
-import glob
-import re
 
 def divide_chunks(list, n):
     for i in range(0, len(list), n):
@@ -49,10 +47,35 @@ def get_url_of_yt_dlp():
                 return None
             return f"{download_url}{arch}"
 
+def _find_best_video_file(filename_base):
+    """
+    Находит самый подходящий видеофайл (по возможности mp4), иначе webm, иначе любой из похожих.
+    """
+    # Пробуем сначала mp4 (идеально)
+    candidates = glob.glob(f"{filename_base}*.mp4")
+    if candidates:
+        candidates.sort(key=os.path.getmtime, reverse=True)
+        return candidates[0]
+
+    # Потом webm (видео, но не всегда поддерживается Telegram)
+    candidates = glob.glob(f"{filename_base}*.webm")
+    if candidates:
+        candidates.sort(key=os.path.getmtime, reverse=True)
+        return candidates[0]
+
+    # Любой файл с этим префиксом
+    candidates = glob.glob(f"{filename_base}*")
+    if candidates:
+        candidates.sort(key=os.path.getmtime, reverse=True)
+        return candidates[0]
+
+    return None
+
 # only video or music
 async def yt_dlp(url):
     args = [
-        'yt-dlp', url, "--max-filesize", "50M", "--max-downloads", "1", "--restrict-filenames"
+        'yt-dlp', url, "--max-filesize", "50M", "--max-downloads", "1", "--restrict-filenames",
+        "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4"
     ]
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -68,9 +91,10 @@ async def yt_dlp(url):
         except OSError:
             print("timeout no such process")
             pass
-        raise Exception('timeout')
+        raise Exception('Timeout: yt-dlp did not finish in 90 seconds')
 
     filename = None
+    # Парсим вывод yt-dlp для имени файла
     for line in stdout.decode("utf-8").splitlines():
         print(line)
         match_dest = re.findall(r" Destination: (.*?)$", line)
@@ -81,29 +105,39 @@ async def yt_dlp(url):
         elif match_already:
             filename = match_already[0]
             break
-    else:
-        raise Exception('file not found (yt-dlp did not report a destination file)')
 
+    if not filename:
+        # В stderr часто бывает ошибка с пояснением
+        err = stderr.decode("utf-8")
+        raise Exception(f'Не удалось определить файл из вывода yt-dlp. stdout:\n{stdout.decode("utf-8")}\nstderr:\n{err}')
+
+    # Проверяем существование файла, пробуем разные расширения
+    filename_base = re.sub(r'\.f\d+(\.\w+)?$', '', filename)  # убирает .f399.mp4 -> .mp4
+    # Сначала пробуем оригинальное имя
     if os.path.exists(filename):
         return filename
 
-    fname_base_ext = re.sub(r'\.f\d+\.', '.', filename)
-    if os.path.exists(fname_base_ext):
-        return fname_base_ext
+    # Пробуем просто .mp4
+    possible_mp4 = f"{filename_base}.mp4"
+    if os.path.exists(possible_mp4):
+        return possible_mp4
 
-    prefix = re.sub(r'\.f\d+(\.\w+)$', r'\1', filename)
-    base_no_ext = os.path.splitext(prefix)[0]
-    candidates = glob.glob(f"{base_no_ext}.*")
-    if candidates:
-        candidates.sort(key=os.path.getmtime, reverse=True)
-        return candidates[0]
+    # Пробуем webm
+    possible_webm = f"{filename_base}.webm"
+    if os.path.exists(possible_webm):
+        return possible_webm
 
-    all_mp4 = glob.glob("*.mp4")
-    for f in all_mp4:
-        if os.path.splitext(f)[0].startswith(os.path.splitext(base_no_ext)[0]):
-            return f
+    # Пробуем любой похожий файл (mp4/webm предпочтительно)
+    best_file = _find_best_video_file(filename_base)
+    if best_file:
+        return best_file
 
-    raise FileNotFoundError(f"{filename} not found. Tried also: {fname_base_ext}, {base_no_ext}.*, and similar .mp4 files")
+    # Если ничего не найдено, логируем все файлы в папке для отладки
+    all_files = glob.glob("*")
+    raise FileNotFoundError(
+        f"{filename} not found. Tried: {possible_mp4}, {possible_webm}, and all matches for '{filename_base}*'.\n"
+        f"Файлы в директории: {all_files}"
+    )
 
 async def tt_videos_or_images(url):
     video_id_from_url = re.findall('https://www.tiktok.com/@.*?/video/(\d+)', url)
