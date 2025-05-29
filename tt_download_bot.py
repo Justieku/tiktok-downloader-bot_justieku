@@ -1,7 +1,7 @@
 import logging
 import os
-import glob
 import uuid
+import subprocess
 from re import findall
 
 from aiogram import Bot, Dispatcher, executor, types
@@ -39,14 +39,26 @@ def is_supported_link(text: str) -> bool:
         findall(VK_REGEX, text)
     )
 
-def cleanup_files(response_path):
-    if not response_path:
-        return
+def cleanup_files(*response_paths):
+    for response_path in response_paths:
+        if not response_path:
+            continue
+        try:
+            os.remove(os.path.abspath(response_path))
+        except Exception as e:
+            logging.warning(f"Не удалось удалить {response_path}: {e}")
 
+def convert_webm_to_mp4(input_file):
+    output_file = f"{os.path.splitext(input_file)[0]}.mp4"
     try:
-        os.remove(os.path.abspath(response_path))
+        subprocess.run([
+            "ffmpeg", "-y", "-i", input_file,
+            "-c:v", "libx264", "-c:a", "aac", "-strict", "experimental", output_file
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return output_file
     except Exception as e:
-        logging.warning(f"Не удалось удалить {response_path}: {e}")
+        logging.error(f"Ошибка при конвертации webm в mp4: {e}")
+        return None
 
 @dp.message_handler(commands=['start', 'help'])
 @dp.throttled(rate=2)
@@ -79,7 +91,6 @@ def escape_markdown(text: str) -> str:
 
 @dp.message_handler(content_types=types.ContentType.VOICE)
 async def voice_to_text(message: types.Message):
-    # Показываем пользователю уведомление, что идет обработка
     wait_msg = await message.reply(
         "🎤 Пожалуйста, подождите!\nВаше голосовое сообщение обрабатывается...",
         disable_notification=True,
@@ -111,15 +122,19 @@ async def voice_to_text(message: types.Message):
                     "Не удалось распознать голосовое сообщение, бред сумасшедшего",
                     disable_notification=True,
                 )
+    except Exception as e:
+        await message.reply(
+            f"Ошибка при обработке голосового сообщения: {e}",
+            disable_notification=True,
+        )
+        logging.exception(e)
     finally:
-        # Удаляем оба файла в любом случае
         for f in (file_name, wav_file):
             if os.path.exists(f):
                 try:
                     os.remove(f)
                 except Exception as e:
                     logging.warning(f"Не удалось удалить {f}: {e}")
-        # Удаляем уведомление "Пожалуйста, подождите!"
         try:
             await bot.delete_message(chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
         except Exception as del_err:
@@ -137,10 +152,37 @@ async def handle_supported_links(message: types.Message):
     )
 
     response = None
+    converted_mp4 = None
 
     try:
         response = await yt_dlp(link)
-        if response.endswith(".mp3"):
+        if not response or not os.path.exists(response):
+            await message.reply(
+                f"Ошибка: не удалось найти скачанный файл для ссылки {link}",
+                disable_notification=True
+            )
+            return
+
+        if response.lower().endswith(".mp4"):
+            with open(response, 'rb') as f:
+                await message.reply_video(
+                    f,
+                    disable_notification=True
+                )
+        elif response.lower().endswith(".webm"):
+            converted_mp4 = convert_webm_to_mp4(response)
+            if converted_mp4 and os.path.exists(converted_mp4):
+                with open(converted_mp4, 'rb') as f:
+                    await message.reply_video(
+                        f,
+                        disable_notification=True
+                    )
+            else:
+                await message.reply(
+                    "Не удалось сконвертировать в mp4. mp4-версия недоступна для этого видео.",
+                    disable_notification=True
+                )
+        elif response.lower().endswith(".mp3"):
             with open(response, 'rb') as f:
                 await message.reply_audio(
                     f,
@@ -148,21 +190,20 @@ async def handle_supported_links(message: types.Message):
                     disable_notification=True
                 )
         else:
-            with open(response, 'rb') as f:
-                await message.reply_video(
-                    f,
-                    disable_notification=True
-                )
-        cleanup_files(response)
+            await message.reply(
+                "Файл не является видео mp4 и не может быть сконвертирован.",
+                disable_notification=True
+            )
+        cleanup_files(response, converted_mp4)
 
     except Exception as e:
         logging.error(e)
         await message.reply(
-            f"error: {e}",
+            f"Ошибка при скачивании или обработке видео: {e}",
             disable_notification=True
         )
-        if response:
-            cleanup_files(response)
+        if response or converted_mp4:
+            cleanup_files(response, converted_mp4)
     finally:
         try:
             await bot.delete_message(chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
