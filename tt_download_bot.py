@@ -6,9 +6,6 @@ from re import findall
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-from gtts import gTTS
-from pydub import AudioSegment
-import speech_recognition as sr
 
 from tt_video import yt_dlp
 from settings import languages, API_TOKEN
@@ -88,57 +85,6 @@ async def text_to_speech(message: types.Message):
 def escape_markdown(text: str) -> str:
     escape_chars = r'\_*[]()~`>#+-=|{}.!'
     return ''.join(['\\' + c if c in escape_chars else c for c in text])
-
-@dp.message_handler(content_types=types.ContentType.VOICE)
-async def voice_to_text(message: types.Message):
-    wait_msg = await message.reply(
-        "🎤 Пожалуйста, подождите!\nВаше голосовое сообщение обрабатывается...",
-        disable_notification=True,
-    )
-
-    file = await bot.get_file(message.voice.file_id)
-    file_path = file.file_path
-    file_name = f"{uuid.uuid4()}.ogg"
-    wav_file = file_name.replace(".ogg", ".wav")
-
-    try:
-        await bot.download_file(file_path, file_name)
-        sound = AudioSegment.from_ogg(file_name)
-        sound.export(wav_file, format="wav")
-
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(wav_file) as source:
-            audio_data = recognizer.record(source)
-            try:
-                text = recognizer.recognize_google(audio_data, language="ru-RU")
-                escaped_text = escape_markdown(text)
-                await message.reply(
-                    f"🗣 Распознанный текст:\n||{escaped_text}||",
-                    parse_mode="MarkdownV2",
-                    disable_notification=True,
-                )
-            except sr.UnknownValueError:
-                await message.reply(
-                    "Не удалось распознать голосовое сообщение, бред сумасшедшего",
-                    disable_notification=True,
-                )
-    except Exception as e:
-        await message.reply(
-            f"Ошибка при обработке голосового сообщения: {e}",
-            disable_notification=True,
-        )
-        logging.exception(e)
-    finally:
-        for f in (file_name, wav_file):
-            if os.path.exists(f):
-                try:
-                    os.remove(f)
-                except Exception as e:
-                    logging.warning(f"Не удалось удалить {f}: {e}")
-        try:
-            await bot.delete_message(chat_id=wait_msg.chat.id, message_id=wait_msg.message_id)
-        except Exception as del_err:
-            logging.warning(f"Не удалось удалить сообщение: {del_err}")
 
 @dp.message_handler(lambda message: is_supported_link(message.text))
 @dp.throttled(rate=3)
