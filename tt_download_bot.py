@@ -16,6 +16,8 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot, storage=storage)
 
+ADMIN_ID = 1115310967
+
 def is_tool(name):
     from shutil import which
     return which(name) is not None
@@ -57,6 +59,12 @@ def convert_webm_to_mp4(input_file):
         logging.error(f"Ошибка при конвертации webm в mp4: {e}")
         return None
 
+async def notify_admin(text):
+    try:
+        await bot.send_message(ADMIN_ID, text)
+    except Exception as e:
+        logging.error(f"Не удалось отправить ошибку админу: {e}")
+
 @dp.message_handler(commands=['start', 'help'])
 @dp.throttled(rate=2)
 async def send_welcome(message: types.Message):
@@ -66,34 +74,13 @@ async def send_welcome(message: types.Message):
         disable_notification=True
     )
 
-@dp.message_handler(commands=['tts'])
-async def text_to_speech(message: types.Message):
-    text = message.get_args()
-    if not text:
-        await message.reply("Пришлите текст после команды /tts", disable_notification=True)
-        return
-
-    tts = gTTS(text, lang='ru')
-    filename = f"{uuid.uuid4()}.mp3"
-    tts.save(filename)
-
-    with open(filename, "rb") as f:
-        await message.reply_voice(f, disable_notification=True)
-
-    os.remove(filename)
-
-def escape_markdown(text: str) -> str:
-    escape_chars = r'\_*[]()~`>#+-=|{}.!'
-    return ''.join(['\\' + c if c in escape_chars else c for c in text])
-
 @dp.message_handler(lambda message: is_supported_link(message.text))
 @dp.throttled(rate=3)
 async def handle_supported_links(message: types.Message):
-    user_lang = get_user_lang(message.from_user.locale)
     link = findall(r'\bhttps?://\S+', message.text)[0]
 
     wait_msg = await message.reply(
-        "⏳ Пожалуйста, подождите!\nВаше видео загружается...",
+        "⏳ Пожалуйста, подождите!\nВаше видео/медиа загружается...",
         disable_notification=True
     )
 
@@ -103,11 +90,7 @@ async def handle_supported_links(message: types.Message):
     try:
         response = await yt_dlp(link)
         if not response or not os.path.exists(response):
-            await message.reply(
-                f"Ошибка: не удалось найти скачанный файл для ссылки {link}",
-                disable_notification=True
-            )
-            return
+            raise Exception(f"Ошибка: не удалось найти скачанный файл для ссылки {link}")
 
         if response.lower().endswith(".mp4"):
             with open(response, 'rb') as f:
@@ -124,10 +107,7 @@ async def handle_supported_links(message: types.Message):
                         disable_notification=True
                     )
             else:
-                await message.reply(
-                    "Не удалось сконвертировать в mp4. mp4-версия недоступна для этого видео.",
-                    disable_notification=True
-                )
+                raise Exception("Не удалось сконвертировать в mp4. mp4-версия недоступна для этого видео.")
         elif response.lower().endswith(".mp3"):
             with open(response, 'rb') as f:
                 await message.reply_audio(
@@ -136,17 +116,16 @@ async def handle_supported_links(message: types.Message):
                     disable_notification=True
                 )
         else:
-            await message.reply(
-                "Файл не является видео mp4 и не может быть сконвертирован.",
-                disable_notification=True
-            )
+            raise Exception("Файл не является видео mp4 и не может быть сконвертирован.")
         cleanup_files(response, converted_mp4)
 
     except Exception as e:
         logging.error(e)
-        await message.reply(
-            f"Ошибка при скачивании или обработке видео: {e}",
-            disable_notification=True
+        await message.reply("😔", disable_notification=True)
+        await notify_admin(
+            f"Ошибка: {e}\n\n"
+            f"Ссылка: {link}\n"
+            f"Пользователь: @{message.from_user.username} ({message.from_user.id})"
         )
         if response or converted_mp4:
             cleanup_files(response, converted_mp4)
@@ -159,11 +138,13 @@ async def handle_supported_links(message: types.Message):
 @dp.message_handler()
 @dp.throttled(rate=3)
 async def handle_invalid_links(message: types.Message):
-    if message.chat.type == 'private':
+    if message.chat.type == "private":
         await message.reply(
-            "Неверная ссылка, пришлите правильную ссылку youtube.com/shorts/, TikTok или VK.",
+            "Я поддерживаю только ссылки на TikTok, VK и YouTube Shorts.\n"
+            "Просто пришли ссылку на видео из этих сервисов.",
             disable_notification=True
         )
+    # В группах и каналах никакой реакции
 
 if __name__ == '__main__':
     if is_tool("yt-dlp"):
