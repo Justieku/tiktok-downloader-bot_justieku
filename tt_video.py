@@ -3,7 +3,6 @@ import glob
 import os
 import platform
 import re
-from httpx import AsyncClient
 from io import BytesIO
 from PIL import Image
 
@@ -51,19 +50,16 @@ def _find_best_video_file(filename_base):
     """
     Находит самый подходящий видеофайл (по возможности mp4), иначе webm, иначе любой из похожих.
     """
-    # Пробуем сначала mp4 (идеально)
     candidates = glob.glob(f"{filename_base}*.mp4")
     if candidates:
         candidates.sort(key=os.path.getmtime, reverse=True)
         return candidates[0]
 
-    # Потом webm (видео, но не всегда поддерживается Telegram)
     candidates = glob.glob(f"{filename_base}*.webm")
     if candidates:
         candidates.sort(key=os.path.getmtime, reverse=True)
         return candidates[0]
 
-    # Любой файл с этим префиксом
     candidates = glob.glob(f"{filename_base}*")
     if candidates:
         candidates.sort(key=os.path.getmtime, reverse=True)
@@ -107,111 +103,74 @@ async def yt_dlp(url):
             break
 
     if not filename:
-        # В stderr часто бывает ошибка с пояснением
         err = stderr.decode("utf-8")
         raise Exception(f'Не удалось определить файл из вывода yt-dlp. stdout:\n{stdout.decode("utf-8")}\nstderr:\n{err}')
 
-    # Проверяем существование файла, пробуем разные расширения
-    filename_base = re.sub(r'\.f\d+(\.\w+)?$', '', filename)  # убирает .f399.mp4 -> .mp4
-    # Сначала пробуем оригинальное имя
+    filename_base = re.sub(r'\.f\d+(\.\w+)?$', '', filename)
     if os.path.exists(filename):
         return filename
 
-    # Пробуем просто .mp4
     possible_mp4 = f"{filename_base}.mp4"
     if os.path.exists(possible_mp4):
         return possible_mp4
 
-    # Пробуем webm
     possible_webm = f"{filename_base}.webm"
     if os.path.exists(possible_webm):
         return possible_webm
 
-    # Пробуем любой похожий файл (mp4/webm предпочтительно)
     best_file = _find_best_video_file(filename_base)
     if best_file:
         return best_file
 
-    # Если ничего не найдено, логируем все файлы в папке для отладки
     all_files = glob.glob("*")
     raise FileNotFoundError(
         f"{filename} not found. Tried: {possible_mp4}, {possible_webm}, and all matches for '{filename_base}*'.\n"
         f"Файлы в директории: {all_files}"
     )
 
+# Новая функция для получения слайдов и аудио для TikTok Slides
 async def tt_videos_or_images(url):
-    video_id_from_url = re.findall('https://www.tiktok.com/@.*?/video/(\d+)', url)
-    user_agent = "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:105.0) Gecko/20100101 Firefox/105.0"
-    if len(video_id_from_url) > 0:
-        video_id = video_id_from_url[0]
-    else:
-        headers1 = {
-            "User-Agent": user_agent,
-            "Accept": "text/html, application/xhtml+xml, application/xml; q=0.9, image/avif, image/webp, */*; q=0.8"
-        }
+    # Пример реализации: 
+    # Если это слайд-шоу (TikTok slides), используйте yt-dlp для скачивания изображений и аудио
+    # Пример вызова:
+    # yt-dlp -o "%(title)s/%(id)s.%(ext)s" --write-thumbnail --skip-download <url>
+    temp_dir = str(uuid.uuid4())
+    os.makedirs(temp_dir, exist_ok=True)
+    args = [
+        'yt-dlp', url, "-o", f"{temp_dir}/%(slide_number)s.%(ext)s",
+        "--force-keyframes-at-cuts",
+        "--write-thumbnail", "--write-info-json", "--write-all-thumbnails"
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=90)
+    except asyncio.exceptions.TimeoutError:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        raise Exception('Timeout: yt-dlp did not finish in 90 seconds')
 
-        async with AsyncClient() as client:
-            r1 = await client.get(url, headers=headers1)
-        print("r1", r1.status_code)
-        if r1.status_code == 301:
-            video_id = re.findall(
-                'a href="https://\w{1,3}\.tiktok\.com/(?:@.*?/video|v)/(\d+)', r1.text)[0]
-        elif r1.status_code == 403:
-            video_id = re.findall("video&#47;(\d+)", r1.text)[0]
-        else:
-            return BaseException('Unknown status code', r1.status_code)
-
-    print("video_id:", video_id)
-    url2 = f"http://api16-normal-useast5.us.tiktokv.com/aweme/v1/aweme/detail/?aweme_id={video_id}"
-    async with AsyncClient() as client:
-        r2 = await client.get(url2, headers={"User-Agent": user_agent})
-    print("r2", r2.status_code)
-    print("r2_headers:", r2.headers)
-    print("r2_text:", r2.text)
-    resp = r2.json().get("aweme_detail")
-    if resp is None:
-        return BaseException('No video here')
-
-    is_video = len(resp["video"]["bit_rate"]) > 0
-    print("is_video", is_video)
-
-    nickname = resp["author"]["nickname"]
-    desc = resp["desc"]
-    statistic = resp["statistics"]
-    music = resp["music"]["play_url"]["uri"]
-
-    if is_video:
-        cover_url = resp["video"]["origin_cover"]["url_list"][0]
-
-        for bit_rate in resp["video"]["bit_rate"]:
-            height = bit_rate["play_addr"]["height"]
-            width = bit_rate["play_addr"]["width"]
-            data_size = int(bit_rate["play_addr"]["data_size"])
-
-            url_list = bit_rate["play_addr"]["url_list"]
-            quality_type = bit_rate["quality_type"]
-
-            if data_size > 19999999:
-                print("to_large_for_tg", height, "x", width, data_size / 1000000,
-                      "MB", "quality_type:", quality_type)
-            else:
-                print("good_for_tg", height, "x", width, data_size / 1000000,
-                      "MB", "quality_type:", quality_type,
-                      "url:", url_list[0])
-                videos_url = url_list
-                large_for_tg = False
-                break
-        else:
-            videos_url = resp["video"]["bit_rate"][0]["play_addr"]["url_list"]
-            large_for_tg = True
-        return {"is_video": True, "large_for_tg": large_for_tg, "cover": cover_url, "items": videos_url, "nickname": nickname, "desc": desc, "statistic": statistic, "music": music}
-
-    else:
-        images_url = []
-        images = resp["image_post_info"]["images"]
-        for i in images:
-            if len(i["display_image"]["url_list"]) > 0:
-                images_url.append(i["display_image"]["url_list"][0])
-            else:
-                print("err. images_url 0 len")
-        return {"is_video": False, "large_for_tg": False, "cover": None, "items": images_url, "nickname": nickname, "desc": desc, "statistic": statistic, "music": music}
+    # Соберём все изображения и аудио
+    all_files = os.listdir(temp_dir)
+    images = sorted([os.path.join(temp_dir, f) for f in all_files if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))])
+    audio = None
+    for f in all_files:
+        if f.lower().endswith('.mp3') or f.lower().endswith('.m4a'):
+            audio = os.path.join(temp_dir, f)
+            break
+    if images and audio:
+        # Вернуть полный путь к изображениям и аудио
+        return {'images': images, 'audio': audio}
+    # Если не удалось, удалить временную папку
+    for f in images:
+        os.remove(f)
+    if audio:
+        os.remove(audio)
+    os.rmdir(temp_dir)
+    raise Exception('Не удалось получить слайды и аудио для данного TikTok')
